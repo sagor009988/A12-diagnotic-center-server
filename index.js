@@ -1,6 +1,7 @@
 const express = require('express');
 const app=express()
 const cors = require('cors');
+var jwt = require('jsonwebtoken');
 require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port=process.env.PORT || 5000;
@@ -27,9 +28,113 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
 
+    const userCollection= client.db("diagonisticCenterDB").collection("users");
     const testsCollection= client.db("diagonisticCenterDB").collection("tests");
     const testBookCollection= client.db("diagonisticCenterDB").collection("testBook");
     const reviewsCollection= client.db("diagonisticCenterDB").collection("reviews");
+    
+    // jwt
+    app.post('/jwt',async(req,res)=>{
+      const user=req.body;
+      const token=jwt.sign(user,process.env.ACCESS_TOKEN_SECRET,{expiresIn:'1h'})
+      res.send({token});
+    })
+        // create a admin
+        app.patch('/users/admin/:id',async(req,res)=>{
+          const id=req.params.id;
+          const  filter={_id : new ObjectId(id)};
+          const updatedDoc={
+            $set : {
+              role : 'admin'
+            }
+          }
+          const result =await userCollection.updateOne(filter,updatedDoc)
+          res.send(result)
+      })
+
+    // check admin 
+    app.get('/users/admin/:email' ,async(req,res)=>{
+        const email=req.params.email;
+        // if(email !==req.decoded?.email){
+        //     return res.status(403).send({message:'unahthorized access'})
+        // }
+        const query={email:email}
+        const user=await userCollection.findOne(query)
+        let admin=false;
+        if(user){
+          admin =user?.role =='admin'
+        }
+        res.send({admin})
+    })
+
+    // middlewere
+    const veryfyToken=(req,res,next)=>{
+      console.log('inside veryfytoken',req.headers.authorization);
+      if(!req.headers.authorization){
+        return res.status(401).send({message:'forbidden access'})
+      }
+      const token=req.headers.authorization.split(' ')[1];
+      jwt.verify(token,process.env.ACCESS_TOKEN_SECRET,(err,decoded)=>{
+        if(err){
+          return res.status(401).send({message:'forbidden access'})
+        }
+        req.decoded=decoded
+        next()
+      })
+    }
+    // veryfy admin after veryfy token
+    const veryfyAdmin=async(req,res,next)=>{
+      const email=req.decoded.email;
+      const query={email:email};
+      const user = await userCollection.findOne(query);
+      const isAdmin=user?.role=='admin';
+      console.log(isAdmin);
+      if(!isAdmin){
+        return res.status(403).send({message:'forbidden access'})
+      }
+      next()
+    }
+
+     // get users to fronntend
+     app.get('/users',async(req,res)=>{
+     
+      const result=await userCollection.find().toArray()
+      res.send(result)
+    })
+
+
+
+    // post user in mongoDb
+    app.post('/users',async(req,res)=>{
+      const user=req.body;
+      // check user is exist to insert
+      const query={email :user.email}
+      const isexistingUser= await userCollection.findOne(query)
+      if(isexistingUser){
+        return res.send({message:'already exist',insertedId:null})
+      }
+      const result=await userCollection.insertOne(user);
+      res.send(result)
+    })
+   
+    // // for create admin
+    // app.get('/usersAdmin',async(req,res)=>{
+    //   const result=await userCollection.find().toArray()
+    //   res.send(result)
+    // })
+   app.get('/users/:id',async(req,res)=>{
+      const id=req.params.id
+      const query={_id : new ObjectId(id)}
+      const  result=await userCollection.findOne(query)
+      res.send(result)
+    })
+    // delete users
+    app.delete('/users/:id',async(req,res)=>{
+      const id=req.params.id;
+      const query={_id: new ObjectId(id)}
+      const result = await userCollection.deleteOne(query)
+      res.send(result)
+    })
 
     //  already book check?
     app.get('/checkTestBooking/:userEmail/:testId', async (req, res) => {
@@ -40,15 +145,22 @@ async function run() {
         const existingBooking = await testBookCollection.findOne({ email: userEmail, testId });
   
         if (existingBooking) {
-          // User has already booked this test
+          // User  already  book kore thakle
           res.send({ alreadyBooked: true });
         } else {
-          // User has not booked this test
+          // User jodi book na kore 
           res.send({ alreadyBooked: false });
         }
       } catch (error){
 
       }})
+
+      // get all booking test data
+        app.get('/testBook',async(req,res)=>{
+        const result=await testBookCollection.find().toArray()
+        res.send(result)
+    })
+
       // get all test data to navbar
       app.get('/userTest',async(req,res)=>{
         const email=req.query.email
@@ -64,11 +176,49 @@ async function run() {
       res.send(result)
     })
 
+    // PUT route to update the status
+app.put("/api/submitResult/:id", (req, res) => {
+  const reservationId = req.params.id;
+  const newStatus = req.body.status;
 
-    // get the tests ingo
+  const reservationIndex = testBook.findIndex((reservation) => reservation._id === reservationId);
+
+  if (reservationIndex !== -1) {
+    // Update the status
+    testBook[reservationIndex].status = newStatus;
+    res.json({ updatedCount: 1, message: "Status updated successfully" });
+  } else {
+    res.status(404).json({ updatedCount: 0, error: "Reservation not found" });
+  }
+});
+
+
+
+    // delete booking test
+    app.delete('/testBook/:id',async(req,res)=>{
+      const id=req.params.id;
+      const query={_id: new ObjectId(id)}
+      const result=await testBookCollection.deleteOne(query)
+      res.send(result)
+    })
+  //  add test in db
+    app.post('/tests',async(req,res)=>{
+      const body=req.body
+      const result=await testsCollection.insertOne(body);
+      res.send(result)
+    })
+
+    // get the tests info
     app.get('/tests',async(req,res)=>{
         const result=await testsCollection.find().toArray()
         res.send(result)
+    })
+    // delete test
+    app.delete('/tests/:id',async(req,res)=>{
+      const id=req.params.id;
+      const query={_id: new ObjectId(id)}
+      const result = await testsCollection.deleteOne(query)
+      res.send(result)
     })
     // get test for details
     app.get('/tests/:id',async(req,res)=>{
@@ -80,6 +230,26 @@ async function run() {
     // reviews
     app.get('/reviews',async(req,res)=>{
         const result=await reviewsCollection.find().toArray();
+        res.send(result)
+    })
+    // update a test
+    app.patch('/tests/:id',async(req,res)=>{
+      const test=req.body;
+      const id=req.params.id;
+      const filter={_id : new ObjectId(id)}
+      const updatedDoc={
+        $set:{
+          testName: test.testName,
+        testDetails: test.testDetails,
+        category: test.category,
+        price: test.price,
+        available_Dates: test.dates,
+        slots: test.slots,
+        test_title: test.testTitle,
+        image: test.image,
+        }
+      }
+        const result=await testsCollection.updateOne(filter,updatedDoc)
         res.send(result)
     })
     
