@@ -1,10 +1,13 @@
 const express = require('express');
-const app=express()
+require('dotenv').config();
+const app=express();
 const cors = require('cors');
 var jwt = require('jsonwebtoken');
-require('dotenv').config()
+
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port=process.env.PORT || 5000;
+
 
 // middlewere
 app.use(cors())
@@ -32,6 +35,7 @@ async function run() {
     const testsCollection= client.db("diagonisticCenterDB").collection("tests");
     const testBookCollection= client.db("diagonisticCenterDB").collection("testBook");
     const reviewsCollection= client.db("diagonisticCenterDB").collection("reviews");
+    const paymentCollection= client.db("diagonisticCenterDB").collection("payments");
     
     // jwt
     app.post('/jwt',async(req,res)=>{
@@ -101,7 +105,15 @@ async function run() {
       const result=await userCollection.find().toArray()
       res.send(result)
     })
-
+    // 
+      // get user
+      app.get('/users/:email',async(req,res)=>{
+        const query={email:req.params.email};
+        const result=await userCollection.findOne(query)
+        console.log(result);
+        res.send(result)
+      })
+      
 
 
     // post user in mongoDb
@@ -252,6 +264,51 @@ app.put("/api/submitResult/:id", (req, res) => {
         const result=await testsCollection.updateOne(filter,updatedDoc)
         res.send(result)
     })
+
+    // get payment History
+    app.get('/payments/:email',async(req,res)=>{
+      const query={email:req.params.email};
+      const result=await paymentCollection.find(query).toArray();
+      console.log(result);
+      res.send(result)
+    })
+    
+
+
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      
+      const amount = parseInt(price * 100);
+      console.log(amount,'inisit the intent');
+
+      const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount,
+          currency: "usd",
+          payment_method_types: ['card']
+
+      })
+      res.send({
+          clientSecret: paymentIntent.client_secret,
+      });
+      
+  })
+  // post to payment collection
+  app.post('/payments',async(req,res)=>{
+    const payment=req.body;
+    console.log(payment);
+    const paymentResult=await paymentCollection.insertOne(payment)
+    // now carefully delete each item from the card
+    console.log('paymentInfo',payment);
+    const query={_id: {
+      $in :payment.testIds.map(id=> new ObjectId(id))
+    }}
+    const result=await testBookCollection.deleteMany(query)
+    res.send({paymentResult,result})
+  })
+
+  
+
+  
     
 
 
